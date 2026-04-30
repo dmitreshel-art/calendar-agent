@@ -16,6 +16,7 @@ data/radicale/*
 !data/radicale/.gitkeep
 data/calendar_service/*
 !data/calendar_service/.gitkeep
+services/radicale/users
 
 # OS/editor
 .DS_Store

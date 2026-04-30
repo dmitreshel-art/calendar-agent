@@ -7,8 +7,7 @@ services:
       - "5232:5232"
     volumes:
       - ./data/radicale:/data
-      - ./services/radicale/config:/config/config:ro
-      - ./services/radicale/rights:/config/rights:ro
+      - ./services/radicale:/config
       - ./data/radicale/users:/config/users
     environment:
       TAKE_FILE_OWNERSHIP: "true"
