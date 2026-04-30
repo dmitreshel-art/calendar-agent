@@ -22,6 +22,7 @@ class EmployeeOut(BaseModel):
     workday_end: str
     workdays: list[str]
     status: str
+    role: str = 'user'
 
     model_config = {"from_attributes": True}
 
@@ -33,6 +34,7 @@ class EmployeePatch(BaseModel):
     workday_start: str | None = None
     workday_end: str | None = None
     workdays: list[str] | None = None
+    role: str | None = None
 
 
 class ParticipantRef(BaseModel):
@@ -94,6 +96,20 @@ class DraftRescheduleEventRequest(BaseModel):
 class DraftCancelEventRequest(BaseModel):
     requester_matrix_id: str
     meeting_id: int
+
+
+class ClearMyCalendarRequest(BaseModel):
+    requester_matrix_id: str
+    start: datetime
+    end: datetime
+
+
+class AdminClearCalendarRequest(BaseModel):
+    admin_matrix_id: str
+    target_matrix_id: str
+    start: datetime
+    end: datetime
+    reason: str = Field(min_length=5, max_length=500)
 
 
 class PendingActionOut(BaseModel):

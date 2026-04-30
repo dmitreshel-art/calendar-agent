@@ -7,11 +7,14 @@ from .security import require_agent_token, require_admin_token
 from .schemas import (
     EnsureEmployeeRequest, EmployeeOut, EmployeePatch, GetScheduleRequest, CalendarEventOut,
     FindFreeSlotsRequest, FreeSlotOut, DraftCreateEventRequest, DraftRescheduleEventRequest,
-    DraftCancelEventRequest, PendingActionOut, ConfirmPendingActionRequest, ConfirmResult,
+    DraftCancelEventRequest, ClearMyCalendarRequest, AdminClearCalendarRequest, PendingActionOut, ConfirmPendingActionRequest, ConfirmResult,
     SearchEmployeesRequest, ReminderOut, HealthOut, AgentMessageRequest, AgentMessageResponse,
 )
 from .employees import ensure_employee, find_employee
-from .calendar_logic import draft_create_event, draft_reschedule_event, draft_cancel_event, confirm_pending_action, get_schedule, free_slots
+from .calendar_logic import (
+    draft_create_event, draft_reschedule_event, draft_cancel_event, draft_clear_my_calendar,
+    draft_admin_clear_calendar, confirm_pending_action, get_schedule, free_slots,
+)
 from .models import Employee, PendingAction, EmployeeStatus, AuditLog, OutboxMessage, utcnow
 from .reminders import enqueue_due_reminders
 from .audit import audit
@@ -100,6 +103,14 @@ def api_draft_cancel_event(req: DraftCancelEventRequest, db: Session = Depends(g
     return action
 
 
+@app.post('/tools/draft-clear-my-calendar', response_model=PendingActionOut, dependencies=[Depends(require_agent_token)])
+def api_draft_clear_my_calendar(req: ClearMyCalendarRequest, db: Session = Depends(get_db)):
+    action = draft_clear_my_calendar(db, req.requester_matrix_id, req.start, req.end)
+    db.commit()
+    db.refresh(action)
+    return action
+
+
 @app.post('/tools/confirm-pending-action', response_model=ConfirmResult, dependencies=[Depends(require_agent_token)])
 def api_confirm_pending_action(req: ConfirmPendingActionRequest, db: Session = Depends(get_db)):
     status, message, meeting_id = confirm_pending_action(db, req.requester_matrix_id, req.pending_action_id, req.confirm)
@@ -161,6 +172,14 @@ def admin_patch_employee(employee_id: str, req: EmployeePatch, db: Session = Dep
     db.commit()
     db.refresh(emp)
     return emp
+
+
+@app.post('/admin/draft-clear-calendar', response_model=PendingActionOut, dependencies=[Depends(require_admin_token)])
+def admin_draft_clear_calendar(req: AdminClearCalendarRequest, db: Session = Depends(get_db)):
+    action = draft_admin_clear_calendar(db, req.admin_matrix_id, req.target_matrix_id, req.start, req.end, req.reason)
+    db.commit()
+    db.refresh(action)
+    return action
 
 
 @app.post('/admin/employees/{employee_id}/block', dependencies=[Depends(require_admin_token)])

@@ -11,6 +11,7 @@ from .reminders import schedule_meeting_reminders
 from .audit import audit
 from .config import get_settings
 from .schemas import ParticipantRef
+from .policy import can_admin_clear_calendar, can_modify_meeting, can_view_details
 
 
 def _aware_utc(dt: datetime) -> datetime:
@@ -114,8 +115,8 @@ def draft_reschedule_event(db: Session, requester_matrix_id: str, meeting_id: in
     meeting = db.get(Meeting, meeting_id)
     if not meeting or meeting.status != MeetingStatus.active.value:
         raise HTTPException(status_code=404, detail='Meeting not found')
-    if requester.id != meeting.organizer_employee_id:
-        # MVP: only organizer can reschedule.
+    if not can_modify_meeting(requester, meeting):
+        # MVP: only organizer can reschedule through user tools.
         raise HTTPException(status_code=403, detail='Only organizer can reschedule the meeting in MVP')
     new_start_u = _aware_utc(new_start)
     new_end_u = _aware_utc(new_end)
@@ -148,7 +149,7 @@ def draft_cancel_event(db: Session, requester_matrix_id: str, meeting_id: int) -
     meeting = db.get(Meeting, meeting_id)
     if not meeting or meeting.status != MeetingStatus.active.value:
         raise HTTPException(status_code=404, detail='Meeting not found')
-    if requester.id != meeting.organizer_employee_id:
+    if not can_modify_meeting(requester, meeting):
         raise HTTPException(status_code=403, detail='Only organizer can cancel the meeting in MVP')
     return create_pending_action(db, requester, 'cancel_event', {'meeting_id': meeting_id})
 
@@ -164,6 +165,91 @@ def _materialize_cancel(db: Session, action: PendingAction) -> Meeting:
         radicale.delete_event(copy.calendar_path, copy.event_uid)
     audit(db, 'event_cancelled', actor_employee_id=action.requester_employee_id, details={'meeting_id': meeting.id})
     return meeting
+
+
+def _meeting_ids_for_employee_range(db: Session, employee: Employee, start: datetime, end: datetime) -> list[int]:
+    return list(db.scalars(
+        select(Meeting.id)
+        .join(MeetingParticipant, MeetingParticipant.meeting_id == Meeting.id)
+        .where(
+            MeetingParticipant.employee_id == employee.id,
+            Meeting.status == MeetingStatus.active.value,
+            Meeting.end_time > _aware_utc(start),
+            Meeting.start_time < _aware_utc(end),
+        )
+        .order_by(Meeting.start_time)
+    ))
+
+
+def draft_clear_my_calendar(db: Session, requester_matrix_id: str, start: datetime, end: datetime) -> PendingAction:
+    requester = ensure_employee(db, requester_matrix_id)
+    start_u = _aware_utc(start)
+    end_u = _aware_utc(end)
+    if end_u <= start_u:
+        raise HTTPException(status_code=400, detail='end must be after start')
+    payload = {
+        'target_employee_id': requester.id,
+        'target_matrix_id': requester.matrix_id,
+        'start': start_u.isoformat(),
+        'end': end_u.isoformat(),
+        'meeting_ids': _meeting_ids_for_employee_range(db, requester, start_u, end_u),
+        'mode': 'self',
+    }
+    return create_pending_action(db, requester, 'clear_calendar', payload)
+
+
+def draft_admin_clear_calendar(db: Session, admin_matrix_id: str, target_matrix_id: str, start: datetime, end: datetime, reason: str) -> PendingAction:
+    admin = ensure_employee(db, admin_matrix_id)
+    target = ensure_employee(db, target_matrix_id)
+    if not can_admin_clear_calendar(admin, target):
+        raise HTTPException(status_code=403, detail='Only calendar admin can clear another calendar')
+    start_u = _aware_utc(start)
+    end_u = _aware_utc(end)
+    if end_u <= start_u:
+        raise HTTPException(status_code=400, detail='end must be after start')
+    reason = reason.strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail='reason is required')
+    payload = {
+        'target_employee_id': target.id,
+        'target_matrix_id': target.matrix_id,
+        'start': start_u.isoformat(),
+        'end': end_u.isoformat(),
+        'meeting_ids': _meeting_ids_for_employee_range(db, target, start_u, end_u),
+        'mode': 'admin',
+        'reason': reason,
+    }
+    return create_pending_action(db, admin, 'clear_calendar', payload)
+
+
+def _materialize_clear_calendar(db: Session, action: PendingAction) -> list[int]:
+    payload = action.payload
+    meeting_ids = list(payload.get('meeting_ids') or [])
+    deleted: list[int] = []
+    radicale = RadicaleClient()
+    for meeting_id in meeting_ids:
+        meeting = db.get(Meeting, meeting_id)
+        if not meeting or meeting.status != MeetingStatus.active.value:
+            continue
+        meeting.status = MeetingStatus.cancelled.value
+        db.execute(delete(Reminder).where(Reminder.meeting_id == meeting.id, Reminder.sent == False))  # noqa: E712
+        for copy in meeting.event_copies:
+            radicale.delete_event(copy.calendar_path, copy.event_uid)
+        deleted.append(meeting.id)
+    audit(
+        db,
+        'calendar_cleared',
+        actor_employee_id=action.requester_employee_id,
+        target_employee_id=payload.get('target_employee_id'),
+        details={
+            'mode': payload.get('mode'),
+            'start': payload.get('start'),
+            'end': payload.get('end'),
+            'reason': payload.get('reason'),
+            'deleted_meeting_ids': deleted,
+        },
+    )
+    return deleted
 
 
 def confirm_pending_action(db: Session, requester_matrix_id: str, pending_action_id: str, confirm: bool) -> tuple[str, str, int | None]:
@@ -193,6 +279,9 @@ def confirm_pending_action(db: Session, requester_matrix_id: str, pending_action
         meeting = _materialize_cancel(db, action)
         meeting_id = meeting.id
         message = f'Событие отменено: {meeting.title}'
+    elif action.action_type == 'clear_calendar':
+        deleted = _materialize_clear_calendar(db, action)
+        message = f'Календарь очищен. Удалено событий: {len(deleted)}'
     else:
         raise HTTPException(status_code=400, detail='Unsupported action type')
     action.status = PendingActionStatus.confirmed.value
@@ -211,7 +300,7 @@ def get_schedule(db: Session, requester_matrix_id: str, target_matrix_id: str | 
     ).all()
     result = []
     for m in rows:
-        if target.id != requester.id:
+        if not can_view_details(requester, target):
             result.append({'meeting_id': None, 'title': 'Занят', 'description': None, 'start': _aware_utc(m.start_time), 'end': _aware_utc(m.end_time), 'timezone': target.timezone, 'participants': []})
         else:
             participants = db.scalars(select(Employee).join(MeetingParticipant, MeetingParticipant.employee_id == Employee.id).where(MeetingParticipant.meeting_id == m.id)).all()

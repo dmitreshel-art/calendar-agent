@@ -14,6 +14,11 @@ class EmployeeStatus(str, enum.Enum):
     blocked = 'blocked'
 
 
+class EmployeeRole(str, enum.Enum):
+    user = 'user'
+    calendar_admin = 'calendar_admin'
+
+
 class PendingActionStatus(str, enum.Enum):
     pending = 'pending'
     confirmed = 'confirmed'
@@ -48,6 +53,7 @@ class Employee(Base):
     workday_end: Mapped[str] = mapped_column(String(5))
     workdays: Mapped[list[str]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default=EmployeeStatus.active.value)
+    role: Mapped[str] = mapped_column(String(30), default=EmployeeRole.user.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -12,9 +12,21 @@ class Base(DeclarativeBase):
     pass
 
 
+def ensure_sqlite_schema_columns(database_url: str | None = None) -> None:
+    url = database_url or settings.database_url
+    if not url.startswith('sqlite'):
+        return
+    migration_engine = engine if database_url is None else create_engine(url, connect_args={"check_same_thread": False})
+    with migration_engine.begin() as conn:
+        existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(employees)").fetchall()}
+        if 'role' not in existing:
+            conn.exec_driver_sql("ALTER TABLE employees ADD COLUMN role VARCHAR(30) DEFAULT 'user' NOT NULL")
+
+
 def init_db() -> None:
     from . import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+    ensure_sqlite_schema_columns()
 
 
 @contextmanager
