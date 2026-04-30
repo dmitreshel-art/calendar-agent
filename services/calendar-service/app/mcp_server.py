@@ -14,6 +14,8 @@ from .schemas import ParticipantRef
 from .employees import ensure_employee, find_employee
 from .calendar_logic import draft_create_event, draft_reschedule_event, draft_cancel_event, confirm_pending_action, get_schedule, free_slots
 from .agent import process_agent_message
+from .reminders import enqueue_due_reminders
+from .models import OutboxMessage
 
 mcp = FastMCP('calendar-agent-service')
 
@@ -98,6 +100,25 @@ def confirm_pending_action_tool(requester_matrix_id: str, pending_action_id: str
     with session_scope() as db:
         status, message, meeting_id = confirm_pending_action(db, requester_matrix_id, pending_action_id, confirm)
         return {'status': status, 'message': message, 'meeting_id': meeting_id}
+
+
+@mcp.tool
+def deliver_notifications_tool() -> list[dict[str, Any]]:
+    """Enqueue due reminders and return all pending outbox messages, marking them as delivered. Call periodically (e.g. every 5 minutes) to deliver calendar notifications."""
+    init_db()
+    from sqlalchemy import select
+    from .models import utcnow
+    with session_scope() as db:
+        enqueue_due_reminders(db)
+        db.flush()
+        messages = list(db.scalars(select(OutboxMessage).where(OutboxMessage.delivered == False).order_by(OutboxMessage.created_at, OutboxMessage.id).limit(100)))
+        result = [{'id': m.id, 'matrix_id': m.matrix_id, 'body': m.body} for m in messages]
+        now = utcnow()
+        for m in messages:
+            m.delivered = True
+            m.delivered_at = now
+        db.commit()
+        return result
 
 
 if __name__ == '__main__':
