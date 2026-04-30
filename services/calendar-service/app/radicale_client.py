@@ -76,7 +76,7 @@ class RadicaleClient:
                 headers={'Content-Type': 'application/xml; charset=utf-8'},
                 data=body.encode('utf-8'),
             )
-            if response.status_code not in (201, 405):
+            if response.status_code not in (201, 405, 409):
                 if self.settings.radicale_strict_writes:
                     response.raise_for_status()
         except Exception:

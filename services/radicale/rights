@@ -6,9 +6,9 @@ permissions: R
 [principal]
 user: .+
 collection: {user}
-permissions: RW
+permissions: RrWw
 
-[calendars]
+[calendar-service-all]
 user: calendar-service
-collection: calendars(/.*)?
-permissions: RW
+collection: .*
+permissions: RrWw

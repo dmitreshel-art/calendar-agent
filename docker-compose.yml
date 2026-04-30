@@ -11,7 +11,13 @@ services:
       - ./services/radicale/rights:/config/rights:ro
       - ./data/radicale/users:/config/users
     environment:
-      TAKE_FILE_OWNERSHIP: "false"
+      TAKE_FILE_OWNERSHIP: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import http.client; c=http.client.HTTPConnection('127.0.0.1',5232,timeout=2); c.request('GET','/'); r=c.getresponse(); raise SystemExit(0 if r.status in (200,302,401,403) else 1)\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
   calendar-service:
     build:
@@ -19,7 +25,8 @@ services:
     container_name: calendar-agent-service
     restart: unless-stopped
     depends_on:
-      - radicale
+      radicale:
+        condition: service_healthy
     ports:
       - "8080:8080"
     env_file:
@@ -27,3 +34,9 @@ services:
     volumes:
       - ./data/calendar_service:/app/data
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
