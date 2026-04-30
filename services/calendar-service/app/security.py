@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import Depends, Header, HTTPException, status
 from .config import get_settings
 
@@ -8,15 +10,22 @@ def _extract_bearer(authorization: str | None) -> str:
     return authorization.split(' ', 1)[1].strip()
 
 
+def _constant_time_equal(candidate: str, expected: str) -> bool:
+    try:
+        return secrets.compare_digest(candidate.encode('ascii'), expected.encode('ascii'))
+    except UnicodeEncodeError:
+        return False
+
+
 def require_agent_token(authorization: str | None = Header(default=None)) -> None:
     settings = get_settings()
     token = _extract_bearer(authorization)
-    if token != settings.agent_api_token and token != settings.admin_api_token:
+    if not (_constant_time_equal(token, settings.agent_api_token) or _constant_time_equal(token, settings.admin_api_token)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Invalid agent token')
 
 
 def require_admin_token(authorization: str | None = Header(default=None)) -> None:
     settings = get_settings()
     token = _extract_bearer(authorization)
-    if token != settings.admin_api_token:
+    if not _constant_time_equal(token, settings.admin_api_token):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Invalid admin token')

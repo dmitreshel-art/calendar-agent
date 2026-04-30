@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from .database import init_db, get_db
+from .config import validate_runtime_settings
 from .security import require_agent_token, require_admin_token
 from .schemas import (
     EnsureEmployeeRequest, EmployeeOut, EmployeePatch, GetScheduleRequest, CalendarEventOut,
@@ -22,6 +23,7 @@ app = FastAPI(title='calendar-agent-service', version=VERSION)
 
 @app.on_event('startup')
 def on_startup() -> None:
+    validate_runtime_settings()
     init_db()
 
 

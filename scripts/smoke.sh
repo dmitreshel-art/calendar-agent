@@ -44,7 +44,16 @@ json_get() {
 }
 
 printf '1/8 health...\n'
-curl -fsS "$BASE/health" >/tmp/calendar-agent-smoke-health.json
+for attempt in $(seq 1 30); do
+  if curl -fsS "$BASE/health" >/tmp/calendar-agent-smoke-health.json; then
+    break
+  fi
+  if [[ "$attempt" == "30" ]]; then
+    echo "Health check failed after $attempt attempts." >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 printf '2/8 ensure employees...\n'
 json_post "/tools/ensure-employee" "{\"matrix_id\":\"$user1\",\"display_name\":\"Smoke User A\"}" >/tmp/calendar-agent-smoke-ensure1.json
