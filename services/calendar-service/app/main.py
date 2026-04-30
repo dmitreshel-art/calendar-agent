@@ -131,6 +131,24 @@ def api_enqueue_due_reminders(db: Session = Depends(get_db)):
     return [ReminderOut(id=m.id, matrix_id=m.matrix_id, body=m.body) for m in messages]
 
 
+@app.post('/tools/outbox/deliver-batch', dependencies=[Depends(require_agent_token)])
+def api_deliver_batch(db: Session = Depends(get_db)):
+    """Enqueue due reminders and return undelivered outbox messages, marking them delivered."""
+    # 1. Move due reminders → outbox
+    enqueue_due_reminders(db)
+    db.flush()
+    # 2. Fetch undelivered outbox
+    messages = list(db.scalars(select(OutboxMessage).where(OutboxMessage.delivered == False).order_by(OutboxMessage.created_at, OutboxMessage.id).limit(100)))  # noqa: E712
+    result = [{'id': m.id, 'matrix_id': m.matrix_id, 'body': m.body} for m in messages]
+    # 3. Mark delivered
+    now = utcnow()
+    for m in messages:
+        m.delivered = True
+        m.delivered_at = now
+    db.commit()
+    return result
+
+
 @app.get('/tools/outbox', response_model=list[ReminderOut], dependencies=[Depends(require_agent_token)])
 def api_outbox(limit: int = 100, db: Session = Depends(get_db)):
     messages = list(db.scalars(select(OutboxMessage).where(OutboxMessage.delivered == False).order_by(OutboxMessage.created_at, OutboxMessage.id).limit(limit)))  # noqa: E712
