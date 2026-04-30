@@ -19,15 +19,28 @@ from .models import Employee, PendingAction, EmployeeStatus, AuditLog, OutboxMes
 from .reminders import enqueue_due_reminders
 from .audit import audit
 from .agent import process_agent_message
+from .mcp_server import mcp
 
 VERSION = '0.2.1'
-app = FastAPI(title='calendar-agent-service', version=VERSION)
 
+# Create MCP ASGI app first (needs lifespan)
+mcp_app = mcp.http_app(transport='streamable-http', path='/mcp')
 
-@app.on_event('startup')
-def on_startup() -> None:
-    validate_runtime_settings()
-    init_db()
+# Combine lifespans: FastMCP + FastAPI startup
+from contextlib import asynccontextmanager
+@asynccontextmanager
+async def combined_lifespan(app):
+    # Start MCP session manager
+    async with mcp_app.lifespan(mcp_app) as state:
+        # Run FastAPI startup
+        validate_runtime_settings()
+        init_db()
+        yield {'mcp_state': state}
+
+app = FastAPI(title='calendar-agent-service', version=VERSION, lifespan=combined_lifespan)
+
+# Mount MCP StreamableHTTP on /mcp
+app.mount('/mcp', mcp_app)
 
 
 @app.get('/health', response_model=HealthOut)
