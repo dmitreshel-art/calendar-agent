@@ -1,0 +1,23 @@
+[project]
+name = "calendar-agent-service"
+version = "0.2.1"
+description = "Matrix-first corporate calendar backend for Radicale/CalDAV with REST and MCP tools"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "SQLAlchemy>=2.0.0",
+  "python-dateutil>=2.9.0",
+  "icalendar>=5.0.0",
+  "caldav>=1.4.0",
+  "requests>=2.32.0",
+  "fastmcp>=2.0.0"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "httpx>=0.27.0"]
+
+[tool.setuptools]
+packages = ["app"]

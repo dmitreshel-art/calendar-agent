@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime data
+.env
+data/radicale/*
+!data/radicale/.gitkeep
+data/calendar_service/*
+!data/calendar_service/.gitkeep
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
