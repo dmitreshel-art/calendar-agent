@@ -27,14 +27,14 @@ services:
       radicale:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "8090:8090"
     env_file:
       - .env
     volumes:
       - ./data/calendar_service:/app/data
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 10s
       timeout: 3s
       retries: 10
