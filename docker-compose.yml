@@ -39,3 +39,30 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+
+  calendar-mcp:
+    build:
+      context: ./services/calendar-service
+    container_name: calendar-agent-mcp
+    restart: unless-stopped
+    depends_on:
+      radicale:
+        condition: service_healthy
+    ports:
+      - "8765:8765"
+    env_file:
+      - .env
+    environment:
+      MCP_TRANSPORT: "streamable-http"
+      MCP_PORT: "8765"
+      MCP_HOST: "0.0.0.0"
+      CALDAV_BASE_URL: "http://radicale:5232"
+    volumes:
+      - ./data/calendar_service:/app/data
+    command: ["python3", "-m", "app.mcp_server"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/mcp/"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s

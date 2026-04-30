@@ -5,6 +5,7 @@ Run locally:
 
 The tools call the same business logic as REST handlers and use SQLite directly.
 """
+import os
 from datetime import datetime
 from typing import Any
 from fastmcp import FastMCP
@@ -101,4 +102,11 @@ def confirm_pending_action_tool(requester_matrix_id: str, pending_action_id: str
 
 if __name__ == '__main__':
     init_db()
-    mcp.run()
+    transport = os.environ.get('MCP_TRANSPORT', 'stdio')
+    if transport == 'stdio':
+        mcp.run()
+    else:
+        # HTTP / SSE / StreamableHTTP transport
+        host = os.environ.get('MCP_HOST', '0.0.0.0')
+        port = int(os.environ.get('MCP_PORT', '8765'))
+        mcp.run(transport=transport, host=host, port=port)
