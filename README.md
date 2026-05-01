@@ -252,6 +252,120 @@ Demo data is disabled by default. Run it manually:
 docker compose exec calendar-service python -m app.cli demo-seed
 ```
 
+## Full stack with Hermes Agent
+
+For production deployment, run Hermes Agent alongside calendar-service in docker-compose. Hermes handles natural-language dialog and Matrix gateway; calendar-service is a pure backend/tool server.
+
+This deployment uses a calendar-specific Hermes image built from the official `nousresearch/hermes-agent:latest` image with extra runtime dependencies for:
+
+- Matrix E2EE (`libolm-dev`, `mautrix[encryption]`)
+- local Russian STT (`faster-whisper`)
+- local TTS (`piper-tts`)
+
+### Architecture
+
+```text
+Element (Matrix client)
+  ↓ Matrix
+Hermes Agent (Docker, outbound gateway client)
+  ↓ MCP (HTTP Streamable, Docker network)
+calendar-service (Docker, port 8090)
+  ↓ CalDAV
+Radicale (Docker, port 5232)
+```
+
+### Deploy
+
+```bash
+# 1. Run setup script (pulls Hermes image, builds calendar-service, creates dirs)
+./deploy/setup.sh
+
+# 2. First-time Hermes config (interactive wizard: model, provider, Matrix)
+docker compose run --rm hermes setup
+
+# 3. Apply calendar-specific runtime config into data/hermes/config.yaml
+./deploy/configure-hermes-calendar.sh
+
+# 4. Start all services
+docker compose up -d
+```
+
+### Calendar Hermes config script
+
+`hermes-home/config.calendar.fragment.yaml` is only a source fragment; Hermes does **not** load it directly. The real runtime file is `data/hermes/config.yaml` (`/opt/data/config.yaml` inside the container).
+
+After `docker compose run --rm hermes setup`, run:
+
+```bash
+./deploy/configure-hermes-calendar.sh
+```
+
+The script backs up `data/hermes/config.yaml`, then writes calendar-specific settings into it:
+
+```yaml
+mcp_servers:
+  calendar-agent:
+    url: http://calendar-service:8090/mcp/mcp
+    timeout: 120
+    connect_timeout: 30
+```
+
+It also applies Matrix behavior, local Russian STT, and local Piper TTS settings. It preserves model/provider/API settings created by `hermes setup`.
+
+Then restart: `docker compose restart hermes`
+
+### Matrix E2EE and local Russian voice
+
+Matrix E2EE is mandatory for this deployment. Set these variables in `data/hermes/.env`:
+
+```env
+MATRIX_ENCRYPTION=true
+MATRIX_DEVICE_ID=HERMES_CALENDAR_AGENT
+MATRIX_RECOVERY_KEY=...
+MATRIX_ALLOWED_USERS=@dmitry:org1.company.ru
+```
+
+Use `MATRIX_ACCESS_TOKEN` in production if possible. Keep `data/hermes/platforms/matrix/store/` backed up: it contains the Matrix crypto store. If it is deleted, the bot may need a fresh Matrix access token/device.
+
+Local Russian STT/TTS settings are defined in `hermes-home/config.calendar.fragment.yaml` and applied to the real Hermes config by `./deploy/configure-hermes-calendar.sh`:
+
+```yaml
+stt:
+  enabled: true
+  provider: local
+  local:
+    model: small
+    language: ru
+
+tts:
+  provider: piper
+  piper:
+    voice: ru_RU-irina-medium
+```
+
+The first STT/TTS use may download model files into the Hermes data volume/cache.
+
+### Environment variables
+
+Create `hermes-home/.env` from `hermes-home/.env.example`. Key variables:
+
+| Variable | Description |
+|---|---|
+| `OPENROUTER_API_KEY` | LLM provider key (or use another provider) |
+| `MATRIX_HOMESERVER` | Matrix homeserver URL, e.g. `https://org1.company.ru` |
+| `MATRIX_USER_ID` | Bot Matrix user, e.g. `@calendar-agent:org1.company.ru` |
+| `MATRIX_ACCESS_TOKEN` | Preferred Matrix authentication token |
+| `MATRIX_ENCRYPTION` | Must be `true` for encrypted rooms |
+| `MATRIX_RECOVERY_KEY` | Element security key for cross-signing verification |
+
+### Data volumes
+
+| Host path | Container path | Purpose |
+|---|---|---|
+| `data/hermes/` | `/opt/data` | Hermes config, sessions, skills |
+| `data/calendar_service/` | `/app/data` | SQLite database |
+| `data/radicale/` | `/data` | CalDAV calendars |
+
 ## Development
 
 ```bash

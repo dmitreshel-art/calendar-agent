@@ -1,4 +1,5 @@
 services:
+  # ── Radicale: CalDAV storage ──────────────────────────────
   radicale:
     image: tomsquest/docker-radicale:3.5.6.0
     container_name: calendar-agent-radicale
@@ -18,6 +19,7 @@ services:
       retries: 20
       start_period: 10s
 
+  # ── Calendar Agent: REST + MCP backend ────────────────────
   calendar-service:
     build:
       context: ./services/calendar-service
@@ -39,3 +41,32 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+
+  # ── Hermes Agent: Matrix gateway + MCP client ─────────────
+  hermes:
+    build:
+      context: ./services/hermes
+    image: calendar-agent-hermes:latest
+    container_name: hermes-agent
+    restart: unless-stopped
+    command: gateway run
+    depends_on:
+      calendar-service:
+        condition: service_healthy
+    volumes:
+      - ./data/hermes:/opt/data
+    environment:
+      HERMES_UID: ${HERMES_UID:-10000}
+      HERMES_GID: ${HERMES_GID:-10000}
+      TZ: ${TZ:-Asia/Barnaul}
+    # Matrix gateway connects outward to the homeserver.
+    # No public HTTP port is required for the calendar bot.
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+networks:
+  default:
+    name: calendar-agent-net

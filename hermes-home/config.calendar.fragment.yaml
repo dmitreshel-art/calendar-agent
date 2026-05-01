@@ -1,0 +1,47 @@
+# Calendar Hermes config fragment.
+# Merge these settings into data/hermes/config.yaml after `hermes setup`.
+
+mcp_servers:
+  calendar-agent:
+    url: http://calendar-service:8090/mcp/mcp
+    timeout: 120
+    connect_timeout: 30
+
+# Only keep the toolsets the calendar bot needs.
+# MCP tools are discovered separately from mcp_servers.
+toolsets:
+  - tts
+  - memory
+  - session_search
+  - skills
+
+# Matrix room safety: in shared rooms, require mention and isolate sessions per user.
+group_sessions_per_user: true
+matrix:
+  require_mention: true
+  auto_thread: true
+  dm_mention_threads: false
+
+# Local Russian speech-to-text.
+stt:
+  enabled: true
+  provider: local
+  local:
+    # User-verified lightweight Russian STT model.
+    model: small
+    language: ru
+
+# Local text-to-speech.
+# Piper is lightweight and local. The voice is downloaded/cache on first use.
+tts:
+  provider: piper
+  piper:
+    # Verify exact available voice name during deployment if Piper renames voices.
+    # Typical Russian Piper voices include ru_RU-irina-medium.
+    voice: ru_RU-irina-medium
+    normalize_audio: true
+
+voice:
+  # If true, Hermes will answer with voice automatically where supported.
+  # For calendar bot we keep it false by default; user can enable with /voice.
+  auto_tts: false
