@@ -10,22 +10,42 @@ from datetime import datetime
 from typing import Any
 from fastmcp import FastMCP
 from .database import init_db, session_scope
+from sqlalchemy import select
 from .schemas import ParticipantRef
 from .employees import ensure_employee, find_employee
-from .calendar_logic import draft_create_event, draft_reschedule_event, draft_cancel_event, confirm_pending_action, get_schedule, free_slots
-from .agent import process_agent_message
+from .calendar_logic import (
+    draft_create_event,
+    draft_reschedule_event,
+    draft_cancel_event,
+    draft_clear_my_calendar,
+    draft_admin_clear_calendar,
+    confirm_pending_action,
+    get_schedule,
+    free_slots,
+)
 from .reminders import enqueue_due_reminders
-from .models import OutboxMessage
+from .audit import audit
+from .models import AuditLog, Employee, OutboxMessage, PendingAction, utcnow
 
 mcp = FastMCP('calendar-agent-service')
 
 
-@mcp.tool
-def agent_message_tool(matrix_id: str, message: str, display_name: str | None = None, email: str | None = None, conversation_id: str | None = None) -> dict[str, Any]:
-    """Process a natural-language Matrix message through the LLM calendar agent runtime."""
-    init_db()
-    with session_scope() as db:
-        return dict(process_agent_message(db, matrix_id, message, display_name, email, conversation_id))
+def _employee_dict(emp: Employee) -> dict[str, Any]:
+    return {
+        'id': emp.id,
+        'matrix_id': emp.matrix_id,
+        'matrix_server': emp.matrix_server,
+        'localpart': emp.localpart,
+        'display_name': emp.display_name,
+        'email': emp.email,
+        'calendar_path': emp.calendar_path,
+        'timezone': emp.timezone,
+        'workday_start': emp.workday_start,
+        'workday_end': emp.workday_end,
+        'workdays': emp.workdays,
+        'status': emp.status,
+        'role': emp.role,
+    }
 
 
 @mcp.tool
@@ -94,12 +114,83 @@ def draft_cancel_event_tool(requester_matrix_id: str, meeting_id: int) -> dict[s
 
 
 @mcp.tool
+def draft_clear_my_calendar_tool(requester_matrix_id: str, start: str, end: str) -> dict[str, Any]:
+    """Create a pending action to clear the requester's own calendar in a time range."""
+    init_db()
+    with session_scope() as db:
+        action = draft_clear_my_calendar(db, requester_matrix_id, datetime.fromisoformat(start), datetime.fromisoformat(end))
+        return {'id': action.id, 'requester_employee_id': action.requester_employee_id, 'action_type': action.action_type, 'payload': action.payload, 'status': action.status}
+
+
+@mcp.tool
+def admin_draft_clear_calendar_tool(admin_matrix_id: str, target_matrix_id: str, start: str, end: str, reason: str) -> dict[str, Any]:
+    """Create a pending action for a calendar admin to clear another employee's calendar in a time range."""
+    init_db()
+    with session_scope() as db:
+        action = draft_admin_clear_calendar(db, admin_matrix_id, target_matrix_id, datetime.fromisoformat(start), datetime.fromisoformat(end), reason)
+        return {'id': action.id, 'requester_employee_id': action.requester_employee_id, 'action_type': action.action_type, 'payload': action.payload, 'status': action.status}
+
+
+@mcp.tool
+def list_pending_actions_tool(requester_matrix_id: str) -> list[dict[str, Any]]:
+    """List pending calendar actions for a requester."""
+    init_db()
+    with session_scope() as db:
+        emp = ensure_employee(db, requester_matrix_id)
+        rows = list(db.scalars(select(PendingAction).where(PendingAction.requester_employee_id == emp.id, PendingAction.status == 'pending').order_by(PendingAction.created_at.desc())))
+        return [{'id': a.id, 'requester_employee_id': a.requester_employee_id, 'action_type': a.action_type, 'payload': a.payload, 'status': a.status, 'created_at': a.created_at.isoformat(), 'expires_at': a.expires_at.isoformat() if a.expires_at else None} for a in rows]
+
+
+@mcp.tool
 def confirm_pending_action_tool(requester_matrix_id: str, pending_action_id: str, confirm: bool = True) -> dict[str, Any]:
     """Confirm or cancel a pending calendar action."""
     init_db()
     with session_scope() as db:
         status, message, meeting_id = confirm_pending_action(db, requester_matrix_id, pending_action_id, confirm)
         return {'status': status, 'message': message, 'meeting_id': meeting_id}
+
+
+@mcp.tool
+def admin_list_employees_tool() -> list[dict[str, Any]]:
+    """List employees for calendar administration."""
+    init_db()
+    with session_scope() as db:
+        rows = list(db.scalars(select(Employee).order_by(Employee.created_at.desc())))
+        return [_employee_dict(e) for e in rows]
+
+
+@mcp.tool
+def admin_patch_employee_tool(employee_id: str, display_name: str | None = None, email: str | None = None, timezone: str | None = None, workday_start: str | None = None, workday_end: str | None = None, workdays: list[str] | None = None, role: str | None = None) -> dict[str, Any]:
+    """Update employee settings such as timezone, workday, status metadata, or calendar role."""
+    init_db()
+    updates = {
+        'display_name': display_name,
+        'email': email,
+        'timezone': timezone,
+        'workday_start': workday_start,
+        'workday_end': workday_end,
+        'workdays': workdays,
+        'role': role,
+    }
+    updates = {k: v for k, v in updates.items() if v is not None}
+    with session_scope() as db:
+        emp = db.get(Employee, employee_id)
+        if not emp:
+            raise ValueError('Employee not found')
+        for field, value in updates.items():
+            setattr(emp, field, value)
+        audit(db, 'admin_employee_updated', target_employee_id=employee_id, details=updates)
+        db.flush()
+        return _employee_dict(emp)
+
+
+@mcp.tool
+def admin_audit_log_tool(limit: int = 100) -> list[dict[str, Any]]:
+    """Read recent calendar administration and mutation audit events."""
+    init_db()
+    with session_scope() as db:
+        rows = list(db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)))
+        return [{'id': r.id, 'event_type': r.event_type, 'actor_employee_id': r.actor_employee_id, 'target_employee_id': r.target_employee_id, 'details': r.details, 'created_at': r.created_at.isoformat()} for r in rows]
 
 
 @mcp.tool

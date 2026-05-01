@@ -148,22 +148,6 @@ class ReminderOut(BaseModel):
     body: str
 
 
-class AgentMessageRequest(BaseModel):
-    matrix_id: str
-    message: str
-    display_name: str | None = None
-    email: str | None = None
-    conversation_id: str | None = None
-
-
-class AgentMessageResponse(BaseModel):
-    status: str
-    reply: str
-    pending_action_id: str | None = None
-    meeting_id: int | None = None
-    data: dict[str, Any] | None = None
-
-
 class HealthOut(BaseModel):
     status: Literal['ok']
     version: str

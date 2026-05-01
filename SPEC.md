@@ -1,28 +1,26 @@
-# Calendar Agent Backend — MVP Specification
+# Calendar Agent Backend — Specification
 
 ## Purpose
 
-This project implements a backend for a corporate calendar agent. Employees interact with a Matrix/Hermes bot. The backend stores calendars in Radicale/CalDAV and exposes a natural-language `/agent/message` endpoint, structured REST API, and MCP tools.
-
-Hermes is not included in the first Docker package. In v0.2.1 Hermes can be a thin Matrix transport that forwards `matrix_id + message` to `/agent/message` and sends the returned `reply` back to Matrix.
+Calendar Agent is a backend and MCP/REST tool server for a Matrix/Hermes calendar assistant. Employees interact with Hermes. Hermes performs natural-language understanding and calls structured Calendar Agent tools. Calendar Agent stores calendars in Radicale/CalDAV and enforces business logic, permissions, confirmation, reminders, and audit.
 
 ## Architecture
 
 ```text
-Matrix / Element
+Matrix / Element / Telegram
   ↓
-Hermes / Matrix bot
-  ↓ /agent/message, REST or MCP
+Hermes Agent
+  ↓ MCP tools or REST /tools/* and /admin/*
 calendar_service
   ↓ CalDAV
 Radicale
 ```
 
-`calendar_service` owns business logic. Radicale is storage only.
+`calendar_service` owns business logic. Radicale is storage only. Hermes is the only conversational/LLM agent in the architecture.
 
 ## MVP scope
 
-Implemented in MVP:
+Implemented:
 
 - employee auto-provisioning by Matrix ID;
 - trusted Matrix federation through homeserver allowlist;
@@ -34,16 +32,17 @@ Implemented in MVP:
 - reschedule/cancel through pending actions;
 - confirmation for every calendar change;
 - Matrix reminder outbox;
+- role-based calendar permissions;
 - admin REST API;
 - audit log;
-- LLM-based natural-language `/agent/message`;
 - REST API;
 - MCP tools;
 - demo seed.
 
-Out of MVP:
+Out of scope:
 
-- Hermes container;
+- embedded natural-language agent runtime inside calendar_service;
+- separate LLM configuration inside calendar_service;
 - recurring events;
 - tasks;
 - rooms/resources;
@@ -84,7 +83,7 @@ A user is admitted if their Matrix homeserver is in `ALLOWED_MATRIX_SERVERS`. Un
 
 Optional `BLOCKED_MATRIX_USERS` prevents service accounts from being provisioned.
 
-## Employee settings
+## Employee settings and roles
 
 Each employee has:
 
@@ -92,9 +91,15 @@ Each employee has:
 - workday start;
 - workday end;
 - workdays;
-- status.
+- status;
+- role.
 
-Defaults come from `.env` and can be changed via admin API.
+Roles:
+
+- `user`;
+- `calendar_admin`.
+
+Defaults come from `.env` and can be changed via admin API or admin MCP tools.
 
 ## Meeting model
 
@@ -109,20 +114,37 @@ Meeting
 
 This avoids reliance on email invites and calendar client RSVP behavior.
 
+## Permission model
+
+- Users can view full details for their own calendar.
+- Users can view only free/busy for other employees.
+- Only the meeting organizer can reschedule/cancel a meeting through user tools.
+- Users can clear their own calendar for a selected range.
+- `calendar_admin` can draft clearing another employee calendar for a selected range.
+- Calendar mutations are recorded in audit log.
+
 ## Confirmation model
 
 All calendar changes create `pending_actions` first. No Radicale change is performed until confirmation.
 
 Pending action types:
 
-- `create_event`
-- `reschedule_event`
-- `cancel_event`
-- `slot_selection` for conversational selection of one of the proposed free slots. Selecting a slot creates a second `create_event` pending action that still requires confirmation.
+- `create_event`;
+- `reschedule_event`;
+- `cancel_event`;
+- `clear_calendar`.
+
+Expected Hermes flow:
+
+1. Parse user request in Hermes.
+2. Call the relevant `draft_*` MCP tool or REST endpoint.
+3. Present returned pending action payload to the user.
+4. On explicit confirmation, call `confirm_pending_action_tool` or `/tools/confirm-pending-action`.
+5. Calendar Agent applies the mutation and records audit.
 
 ## Free/busy privacy
 
-When requesting another employee's schedule, only free/busy information is exposed. Event titles, descriptions and participants are hidden.
+When requesting another employee's schedule, only free/busy information is exposed. Event titles, descriptions, and participants are hidden.
 
 ## Free slot search defaults
 
@@ -134,15 +156,13 @@ Because employees use Matrix as their main interface, reminders are not only Cal
 
 A Matrix/Hermes worker should:
 
-1. call `/tools/reminders/enqueue-due`;
-2. call `/tools/outbox`;
-3. send each body to the given `matrix_id`;
-4. call `/tools/outbox/{id}/mark-delivered`.
+1. call `deliver_notifications_tool` via MCP, or REST `/tools/reminders/enqueue-due` + `/tools/outbox`;
+2. send each body to the given `matrix_id`;
+3. mark REST-delivered messages as delivered when using REST outbox endpoints.
 
 Supported reminder model:
 
 - default reminder: 15 minutes;
-- custom reminder minutes/hours/day can be extracted by the built-in LLM endpoint into `reminder_minutes`;
 - structured REST/MCP clients can pass `reminder_minutes` directly;
 - `no_reminder=true` disables reminder.
 
@@ -165,77 +185,21 @@ Audit is stored in SQLite table `audit_log` and container logs.
 
 Important event types:
 
-- `employee_auto_provisioned`
-- `calendar_created`
-- `event_draft_created`
-- `event_created`
-- `event_rescheduled`
-- `event_cancelled`
-- `reminder_sent`
-- `employee_blocked`
-- `employee_unblocked`
-- `admin_employee_updated`
+- `employee_auto_provisioned`;
+- `calendar_created`;
+- `event_draft_created`;
+- `event_created`;
+- `event_rescheduled`;
+- `event_cancelled`;
+- `calendar_cleared`;
+- `reminder_sent`;
+- `employee_blocked`;
+- `employee_unblocked`;
+- `admin_employee_updated`.
 
-Full user messages and full LLM traces are intentionally not stored in MVP audit.
-
-
-## LLM orchestration
-
-The service includes a narrow LLM layer for calendar commands. It is configured through:
-
-```env
-LLM_BASE_URL=https://your-openai-compatible-endpoint/v1
-LLM_API_KEY=...
-LLM_MODEL=...
-LLM_TIMEOUT_SECONDS=30
-```
-
-The LLM does not mutate calendars. It only converts a user message into a JSON intent. Business logic then validates the intent and creates pending actions.
-
-Main endpoint:
-
-- `POST /agent/message`
-
-Input:
-
-```json
-{
-  "matrix_id": "@ivanov:org1.company.ru",
-  "display_name": "Иванов Иван",
-  "conversation_id": "matrix-room-id",
-  "message": "Запланируй встречу с Петровой завтра после обеда на 30 минут"
-}
-```
-
-Output:
-
-```json
-{
-  "status": "slot_selection",
-  "reply": "Нашел подходящие варианты: ... Какой выбрать?",
-  "pending_action_id": "..."
-}
-```
-
-The external Matrix/Hermes transport should send `reply` to the user and forward the next user message back to `/agent/message`. Confirmations and simple slot selections are handled deterministically without another LLM call.
-
-Supported intents in v0.2.1:
-
-- `get_schedule`;
-- `search_employees`;
-- `find_free_slots`;
-- `create_event`;
-- `reschedule_event`;
-- `cancel_event`;
-- `unknown`.
-
-If reschedule/cancel is ambiguous, the service returns candidate meeting IDs and asks the user to clarify.
+Full user messages are not stored in Calendar Agent audit; Hermes owns conversation history.
 
 ## REST API
-
-Agent endpoint:
-
-- `POST /agent/message`
 
 Tool endpoints:
 
@@ -246,6 +210,7 @@ Tool endpoints:
 - `POST /tools/draft-create-event`
 - `POST /tools/draft-reschedule-event`
 - `POST /tools/draft-cancel-event`
+- `POST /tools/draft-clear-my-calendar`
 - `POST /tools/confirm-pending-action`
 - `GET /tools/pending-actions`
 - `POST /tools/reminders/enqueue-due`
@@ -257,18 +222,12 @@ Admin endpoints:
 - `GET /admin/employees`
 - `GET /admin/employees/{id}`
 - `PATCH /admin/employees/{id}`
+- `POST /admin/draft-clear-calendar`
 - `POST /admin/employees/{id}/block`
 - `POST /admin/employees/{id}/unblock`
 - `GET /admin/audit-log`
 
-Service endpoints:
-
-- `GET /health`
-- `GET /version`
-
 ## MCP tools
-
-MCP tools wrap the same logic as REST endpoints:
 
 - `ensure_employee_tool`
 - `search_employees_tool`
@@ -277,48 +236,15 @@ MCP tools wrap the same logic as REST endpoints:
 - `draft_create_event_tool`
 - `draft_reschedule_event_tool`
 - `draft_cancel_event_tool`
+- `draft_clear_my_calendar_tool`
+- `list_pending_actions_tool`
 - `confirm_pending_action_tool`
-- `agent_message_tool`
+- `deliver_notifications_tool`
+- `admin_list_employees_tool`
+- `admin_patch_employee_tool`
+- `admin_draft_clear_calendar_tool`
+- `admin_audit_log_tool`
 
-## Language
+## Notes on removed legacy mode
 
-User-facing text is Russian. Code, API fields, logs and event type names are English.
-
-## Future improvements
-
-- direct Matrix sending from reminder worker;
-- Hermes Docker profile;
-- LDAP/Keycloak sync;
-- PostgreSQL option;
-- recurring events;
-- richer attendee status model;
-- external notification webhooks;
-- production-grade CalDAV collection management;
-- OAuth2/JWT service authentication.
-
-
-## Senior-review implementation notes
-
-Calendar collections are created during auto-provisioning. Radicale writes are strict by default, so a failed CalDAV write causes the API call to fail rather than silently diverging from SQLite. Employee IDs use a readable prefix plus a short hash suffix to prevent collisions in federated Matrix environments.
-
-
-## Implementation notes v0.2.1
-
-The v0.2.1 revision fixes the architectural gap where LLM settings existed but no LLM runtime was present. The backend now supports both modes:
-
-1. conversational mode through `/agent/message`;
-2. structured tool mode through REST/MCP.
-
-This keeps Hermes optional in the Docker package while still allowing real Matrix users to send natural-language calendar commands once a thin Matrix transport is connected.
-
-## Implementation notes v0.2.1
-
-The agent runtime includes a structured dialog state table. It does not store full chat history. It stores only the current expected answer for a given `matrix_id + conversation_id` pair:
-
-- `confirm_pending_action` — waiting for yes/no confirmation;
-- `slot_selection` — waiting for a free-slot number;
-- `choose_employee` — waiting for an employee number when a name matches multiple employees;
-- `choose_event` — waiting for an event number when reschedule/cancel matches multiple events;
-- `await_reschedule_time` — waiting for the new time after the user selected which event to move.
-
-This prevents a reply like `Да` in one Matrix room from confirming a pending action that was created in another room by the same employee.
+Earlier MVP builds exposed an embedded `/agent/message` natural-language endpoint and an MCP `agent_message_tool`. That mode has been removed to avoid a nested `LLM → tool → LLM → business logic` architecture. Hermes now owns NLU/dialogue; Calendar Agent only exposes deterministic tools.

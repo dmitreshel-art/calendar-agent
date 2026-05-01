@@ -26,13 +26,6 @@ class PendingActionStatus(str, enum.Enum):
     expired = 'expired'
 
 
-class DialogStateStatus(str, enum.Enum):
-    active = 'active'
-    resolved = 'resolved'
-    cancelled = 'cancelled'
-    expired = 'expired'
-
-
 class MeetingStatus(str, enum.Enum):
     active = 'active'
     cancelled = 'cancelled'
@@ -109,20 +102,6 @@ class PendingAction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class DialogState(Base):
-    __tablename__ = 'dialog_states'
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    requester_employee_id: Mapped[str] = mapped_column(ForeignKey('employees.id'), index=True)
-    conversation_id: Mapped[str] = mapped_column(String(255), index=True)
-    state_type: Mapped[str] = mapped_column(String(50), index=True)
-    payload: Mapped[dict] = mapped_column(JSON)
-    status: Mapped[str] = mapped_column(String(20), default=DialogStateStatus.active.value, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Reminder(Base):

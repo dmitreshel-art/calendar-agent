@@ -8,7 +8,7 @@ from .schemas import (
     EnsureEmployeeRequest, EmployeeOut, EmployeePatch, GetScheduleRequest, CalendarEventOut,
     FindFreeSlotsRequest, FreeSlotOut, DraftCreateEventRequest, DraftRescheduleEventRequest,
     DraftCancelEventRequest, ClearMyCalendarRequest, AdminClearCalendarRequest, PendingActionOut, ConfirmPendingActionRequest, ConfirmResult,
-    SearchEmployeesRequest, ReminderOut, HealthOut, AgentMessageRequest, AgentMessageResponse,
+    SearchEmployeesRequest, ReminderOut, HealthOut,
 )
 from .employees import ensure_employee, find_employee
 from .calendar_logic import (
@@ -18,7 +18,6 @@ from .calendar_logic import (
 from .models import Employee, PendingAction, EmployeeStatus, AuditLog, OutboxMessage, utcnow
 from .reminders import enqueue_due_reminders
 from .audit import audit
-from .agent import process_agent_message
 from .mcp_server import mcp
 
 VERSION = '0.2.1'
@@ -51,21 +50,6 @@ def health() -> HealthOut:
 @app.get('/version')
 def version() -> dict:
     return {'version': VERSION}
-
-
-@app.post('/agent/message', response_model=AgentMessageResponse, dependencies=[Depends(require_agent_token)])
-def api_agent_message(req: AgentMessageRequest, db: Session = Depends(get_db)):
-    result = process_agent_message(db, req.matrix_id, req.message, req.display_name, req.email, req.conversation_id)
-    db.commit()
-    known = {'status', 'reply', 'pending_action_id', 'meeting_id'}
-    data = {k: v for k, v in result.items() if k not in known}
-    return AgentMessageResponse(
-        status=result.get('status', 'ok'),
-        reply=result.get('reply', ''),
-        pending_action_id=result.get('pending_action_id'),
-        meeting_id=result.get('meeting_id'),
-        data=data or None,
-    )
 
 
 @app.post('/tools/ensure-employee', response_model=EmployeeOut, dependencies=[Depends(require_agent_token)])

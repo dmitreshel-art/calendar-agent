@@ -48,11 +48,6 @@ class Settings(BaseSettings):
     radicale_calendar_root: str = '/calendars'
     radicale_strict_writes: bool = True
 
-    llm_base_url: str = 'https://api.example.ru/v1'
-    llm_api_key: str = 'change-me'
-    llm_model: str = 'qwen-plus'
-    llm_timeout_seconds: int = 30
-
     mcp_enabled: bool = True
     mcp_transport: str = 'stdio'
 
