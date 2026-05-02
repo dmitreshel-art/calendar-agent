@@ -3,7 +3,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 from sqlalchemy import select, delete
 from fastapi import HTTPException
-from .models import Meeting, MeetingParticipant, EventCopy, PendingAction, PendingActionStatus, MeetingStatus, Employee, Reminder
+from .models import Meeting, MeetingParticipant, EventCopy, PendingAction, PendingActionStatus, MeetingStatus, Employee, Reminder, utcnow
 from .employees import ensure_employee, resolve_participant
 from .radicale_client import RadicaleClient, new_uid
 from .freebusy import default_search_range, find_free_slots as find_slots
@@ -22,6 +22,20 @@ def _aware_utc(dt: datetime) -> datetime:
 
 def _maybe_aware_utc(dt: datetime | None) -> datetime | None:
     return _aware_utc(dt) if dt is not None else None
+
+
+def _ensure_future_start(start_u: datetime, field_name: str = 'start') -> None:
+    now = _aware_utc(utcnow())
+    if start_u <= now:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'error': 'event_start_must_be_in_future',
+                'message': f'{field_name} must be in the future',
+                field_name: start_u.isoformat(),
+                'now': now.isoformat(),
+            },
+        )
 
 
 def resolve_participants(db: Session, requester: Employee, refs: list[ParticipantRef]) -> list[Employee]:
@@ -66,6 +80,7 @@ def draft_create_event(db: Session, requester_matrix_id: str, title: str | None,
     end_u = _aware_utc(end)
     if end_u <= start_u:
         raise HTTPException(status_code=400, detail='end must be after start')
+    _ensure_future_start(start_u)
     settings = get_settings()
     reminder = None if no_reminder else (reminder_minutes if reminder_minutes is not None else settings.default_reminder_minutes)
     payload = {
@@ -87,11 +102,14 @@ def _materialize_create_event(db: Session, action: PendingAction) -> Meeting:
     participants = [p for p in participants if p]
     if not requester or not participants:
         raise HTTPException(status_code=400, detail='Invalid pending action participants')
+    start_time = datetime.fromisoformat(payload['start'])
+    end_time = datetime.fromisoformat(payload['end'])
+    _ensure_future_start(_aware_utc(start_time))
     meeting = Meeting(
         title=payload['title'],
         description=payload.get('description'),
-        start_time=datetime.fromisoformat(payload['start']),
-        end_time=datetime.fromisoformat(payload['end']),
+        start_time=start_time,
+        end_time=end_time,
         timezone=payload.get('timezone') or requester.timezone,
         organizer_employee_id=requester.id,
         reminder_minutes=payload.get('reminder_minutes'),
@@ -122,6 +140,7 @@ def draft_reschedule_event(db: Session, requester_matrix_id: str, meeting_id: in
     new_end_u = _aware_utc(new_end)
     if new_end_u <= new_start_u:
         raise HTTPException(status_code=400, detail='new_end must be after new_start')
+    _ensure_future_start(new_start_u, 'new_start')
     payload = {'meeting_id': meeting_id, 'new_start': new_start_u.isoformat(), 'new_end': new_end_u.isoformat()}
     return create_pending_action(db, requester, 'reschedule_event', payload)
 
@@ -134,6 +153,7 @@ def _materialize_reschedule(db: Session, action: PendingAction) -> Meeting:
     meeting.end_time = datetime.fromisoformat(action.payload['new_end'])
     if meeting.end_time <= meeting.start_time:
         raise HTTPException(status_code=400, detail='new_end must be after new_start')
+    _ensure_future_start(_aware_utc(meeting.start_time), 'new_start')
     db.execute(delete(Reminder).where(Reminder.meeting_id == meeting.id, Reminder.sent == False))  # noqa: E712
     participants = db.scalars(select(Employee).join(MeetingParticipant, MeetingParticipant.employee_id == Employee.id).where(MeetingParticipant.meeting_id == meeting.id)).all()
     schedule_meeting_reminders(db, meeting, list(participants))

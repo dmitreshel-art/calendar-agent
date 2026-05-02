@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +14,9 @@ from app.calendar_logic import (
     confirm_pending_action,
     draft_admin_clear_calendar,
     draft_clear_my_calendar,
+    draft_create_event,
     draft_cancel_event,
+    draft_reschedule_event,
     get_schedule,
 )
 
@@ -87,6 +89,76 @@ def make_meeting(db, organizer, participants, title='Test meeting'):
         db.add(MeetingParticipant(meeting_id=meeting.id, employee_id=participant.id))
     db.flush()
     return meeting
+
+
+def test_draft_create_event_rejects_past_start(db, monkeypatch):
+    now = datetime(2026, 5, 2, 3, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr('app.calendar_logic.utcnow', lambda: now)
+
+    with pytest.raises(HTTPException) as excinfo:
+        draft_create_event(
+            db,
+            '@dmitry:org1.company.ru',
+            'Совещание с шефом',
+            None,
+            [],
+            now - timedelta(minutes=10),
+            now + timedelta(minutes=20),
+            'Asia/Barnaul',
+            15,
+            False,
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail['error'] == 'event_start_must_be_in_future'
+    assert excinfo.value.detail['start'] == (now - timedelta(minutes=10)).isoformat()
+
+
+def test_confirm_create_event_rejects_action_that_became_past(db, monkeypatch):
+    draft_now = datetime(2026, 5, 2, 3, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr('app.calendar_logic.utcnow', lambda: draft_now)
+    action = draft_create_event(
+        db,
+        '@dmitry:org1.company.ru',
+        'Short notice event',
+        None,
+        [],
+        draft_now + timedelta(minutes=5),
+        draft_now + timedelta(minutes=35),
+        'Asia/Barnaul',
+        15,
+        False,
+    )
+
+    confirm_now = draft_now + timedelta(minutes=6)
+    monkeypatch.setattr('app.calendar_logic.utcnow', lambda: confirm_now)
+
+    with pytest.raises(HTTPException) as excinfo:
+        confirm_pending_action(db, '@dmitry:org1.company.ru', action.id, True)
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail['error'] == 'event_start_must_be_in_future'
+    assert db.query(Meeting).count() == 0
+
+
+def test_draft_reschedule_event_rejects_past_new_start(db, monkeypatch):
+    now = datetime(2026, 5, 2, 3, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr('app.calendar_logic.utcnow', lambda: now)
+    dmitry = make_employee(db, '@dmitry:org1.company.ru', 'Dmitry')
+    existing = make_meeting(db, dmitry, [dmitry], title='Future event')
+
+    with pytest.raises(HTTPException) as excinfo:
+        draft_reschedule_event(
+            db,
+            dmitry.matrix_id,
+            existing.id,
+            now - timedelta(minutes=1),
+            now + timedelta(minutes=29),
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail['error'] == 'event_start_must_be_in_future'
+    assert excinfo.value.detail['new_start'] == (now - timedelta(minutes=1)).isoformat()
 
 
 def test_get_schedule_returns_freebusy_for_other_calendar(db):
